@@ -1,0 +1,31 @@
+[project]
+name = "rmgaf"
+version = "0.1.0"
+description = "JSON-first RPG Maker MV/MZ resource filename case checker and repair tool"
+readme = "README.md"
+authors = [
+    { name = "Hoshino-Yumetsuki"}
+]
+requires-python = ">=3.11"
+dependencies = [
+    "rich>=15.0.0",
+    "tree-sitter>=0.25.2,<0.26",
+    "tree-sitter-javascript>=0.25.0",
+]
+
+[project.scripts]
+rmgaf = "rmgaf.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
+
+[[tool.uv.index]]
+url = "https://mirrors.ustc.edu.cn/pypi/web/simple"
+default = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.10",
+]

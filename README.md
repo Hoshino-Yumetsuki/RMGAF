@@ -12,7 +12,7 @@ rmgaf /path/to/game
 ## 安装与运行
 
 ```sh
-npx rmgaf /path/to/game
+npx @q78kg/rmgaf /path/to/game
 ```
 
 ## 使用
@@ -28,6 +28,8 @@ npx rmgaf /path/to/game
 | `--help`           | 查看用法                                                     |
 
 交互终端显示扫描动画、当前文件、资源统计、重命名差异与耗时；重定向到文件或管道时不输出动画与 ANSI 颜色。默认限制差异展示数量，大量问题可用 `--verbose` 完整输出。
+
+`rename 旧路径 → 新路径` 是扫描生成的改名计划，末尾的 `Repaired N names` 才表示实际执行数量。若出现 `error`、`conflict` 或 `unsafe`，会显示 `Blocked … no files renamed`，整次修复不写入；`--trust` 仅授权执行加载器，不会绕过这些错误。
 
 ```sh
 rmgaf ./www --check --verbose > report.txt

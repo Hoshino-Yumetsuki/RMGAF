@@ -228,6 +228,37 @@ void test("CLI does not execute loaders without explicit trusted-code authorizat
   assert.equal(clean.status, 0, clean.stdout + clean.stderr)
 })
 
+void test("trusted CLI repair waits for readable HTML then renames actual files", (t) => {
+  const { code, encoded } = encryptedLoader()
+  const root = fixture(t, code, encoded)
+  const entry = path.join(root, "index.html")
+  const html = fs.readFileSync(entry, "utf8") + '<link rel="stylesheet" href="styles/Game.css">'
+  fs.mkdirSync(path.join(root, "styles"))
+  fs.writeFileSync(path.join(root, "styles/game.CSS"), "body { color: red; }")
+  fs.writeFileSync(entry, html + "<style>.broken {</style>")
+  const before = snapshot(root)
+  const command = ["--import", "tsx", "src/cli.ts", root, "--trust", "--no-color"]
+  const blocked = spawnSync(process.execPath, command, { encoding: "utf8" })
+  assert.equal(blocked.status, 1, blocked.stdout + blocked.stderr)
+  assert.deepEqual(snapshot(root), before)
+
+  fs.writeFileSync(entry, html)
+  const expected = snapshot(root)
+  for (const [old, target] of [
+    ["img/characters/hero.PNG", "img/characters/Hero.png"],
+    ["styles/game.CSS", "styles/Game.css"]
+  ]) {
+    expected[target] = expected[old]
+    delete expected[old]
+  }
+  const repaired = spawnSync(process.execPath, command, { encoding: "utf8" })
+  assert.equal(repaired.status, 0, repaired.stdout + repaired.stderr)
+  assert.deepEqual(snapshot(root), expected)
+  const clean = spawnSync(process.execPath, [...command, "--check"], { encoding: "utf8" })
+  assert.equal(clean.status, 0, clean.stdout + clean.stderr)
+  assert.deepEqual(snapshot(root), expected)
+})
+
 void test("unsupported mutable dependencies are rejected instead of guessing decryption", async (t) => {
   const code = `(function(){ let key='a'; key='b'; DataManager.loadDataFile=function(name){ DataManager.onLoad(JSON.parse(key)); }; })();`
   const root = fixture(t, code, "encrypted")

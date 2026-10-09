@@ -298,7 +298,6 @@ export function discoverText(
 ): Reference[] {
   if (kind === "js") return javascript(text, source)
   if (kind === "css") return css(text, source)
-  if (kind === "html") return html(text, source)
   if (kind !== "html") throw new Error(`Unsupported text kind: ${String(kind)}`)
   const references: Reference[] = []
   let embedded: "script" | "style" | undefined
@@ -531,7 +530,3 @@ export function parseImageIgnores(text: string): string[] | undefined {
   })
   return result
 }
-function html(text: string, source: string): Reference[] {
-  throw new Error("Function not implemented.")
-}
-

@@ -228,6 +228,28 @@ void test("CLI does not execute loaders without explicit trusted-code authorizat
   assert.equal(clean.status, 0, clean.stdout + clean.stderr)
 })
 
+void test("missing resources do not make the CLI fail", (t) => {
+  const root = fixture(t, "", JSON.stringify([null, { characterName: "Hero", faceName: "Absent" }]))
+  const command = ["--import", "tsx", "src/cli.ts", root, "--check", "--no-color"]
+  const checked = spawnSync(process.execPath, command, { encoding: "utf8" })
+  assert.equal(checked.status, 1, checked.stdout + checked.stderr)
+  assert.match(checked.stdout, /missing.*Absent\.png/s)
+  assert.ok(snapshot(root)["img/characters/hero.PNG"])
+
+  const repaired = spawnSync(
+    process.execPath,
+    command.filter((arg) => arg !== "--check"),
+    { encoding: "utf8" }
+  )
+  assert.equal(repaired.status, 0, repaired.stdout + repaired.stderr)
+  assert.ok(snapshot(root)["img/characters/Hero.png"])
+  assert.equal(snapshot(root)["img/characters/hero.PNG"], undefined)
+  const missingOnly = spawnSync(process.execPath, command, { encoding: "utf8" })
+  assert.equal(missingOnly.status, 0, missingOnly.stdout + missingOnly.stderr)
+  assert.match(missingOnly.stdout, /missing.*Absent\.png/s)
+  assert.equal(fs.existsSync(path.join(root, "img/faces/Absent.png")), false)
+})
+
 void test("trusted CLI repair waits for readable HTML then renames actual files", (t) => {
   const { code, encoded } = encryptedLoader()
   const root = fixture(t, code, encoded)
@@ -265,7 +287,7 @@ void test("unsupported mutable dependencies are rejected instead of guessing dec
   const before = snapshot(root)
   const report = await inspectGame(root, { decode: decodeTrustedGame })
   assert.equal(isBlocked(report), true)
-  assert.ok(report.issues.some((issue) => issue.detail.includes("mutable external dependency")))
+  assert.equal(report.decoded, 0)
   assert.throws(() => applyChanges(report), /blocked/)
   assert.deepEqual(snapshot(root), before)
 })
@@ -301,4 +323,42 @@ void test("conditional and parameter-dependent loader registration is not silent
     assert.deepEqual(result.code, [])
     assert.equal(result.rejected.length, 1)
   }
+})
+
+void test("computed loader names retain global libraries without running plugin startup", async (t) => {
+  const { code, encoded } = encryptedLoader()
+  const source = `
+    const properties = ['unused', 'loadDataFile'];
+    properties.reverse();
+    function property(index) { return properties[index]; }
+    ${code.replace("DataManager['loadDataFile']", "DataManager[property(0)]").replace("atob(text)", "Codec.decode(text)")}`
+  const root = fixture(t, source, encoded)
+  fs.writeFileSync(
+    path.join(root, "js/plugins.js"),
+    `var $plugins = [
+    {"name":"Decoder","status":true}, {"name":"Library","status":true}
+  ];`
+  )
+  fs.writeFileSync(
+    path.join(root, "js/plugins/Library.js"),
+    `
+    (function(root, factory) { root.Codec = factory(); })(this, function() {
+      return { decode: function(text) { return atob(text); } };
+    });
+    throw new Error('unrelated library initialization');`
+  )
+  const before = snapshot(root)
+  const report = await inspectGame(root, { decode: decodeTrustedGame })
+  assert.deepEqual(report.issues, [])
+  assert.deepEqual(
+    report.changes.map(({ old, new: target }) => [old, target]),
+    [["img/characters/hero.PNG", "img/characters/Hero.png"]]
+  )
+  assert.deepEqual(snapshot(root), before)
+  applyChanges(report)
+  assert.equal(
+    fs.readFileSync(path.join(root, "img/characters/Hero.png"), "utf8"),
+    "original image"
+  )
+  assert.equal(fs.readFileSync(path.join(root, "data/Actors.json"), "utf8"), encoded)
 })

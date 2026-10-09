@@ -158,7 +158,7 @@ async function main(): Promise<number> {
         ) + "\n"
       )
     }
-    return report.issues.length || (values.check && report.changes.length) ? 1 : 0
+    return blocked || (values.check && report.changes.length) ? 1 : 0
   } finally {
     if (active) process.stdout.write("\r\x1b[2K")
     process.removeListener("SIGINT", interrupt)

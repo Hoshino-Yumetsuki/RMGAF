@@ -1,5 +1,6 @@
 import { createContext, Script } from "node:vm"
 import { VmInput, VmOutput, maxVmBytes } from "./vm-protocol.js"
+import { extractLibrary, extractLoaders, normalizeLoader } from "./loader.js"
 
 // This process is a fault/timeout boundary, NOT a security sandbox. It is only
 // launched after explicit trusted-code authorization in the parent CLI.
@@ -103,9 +104,23 @@ async function main(): Promise<void> {
     String.prototype.contains = String.prototype.includes;
     Array.prototype.contains = Array.prototype.includes;
     function __decode(path) {
+      DataManager._errorUrl = null;
       __loaded = false; __captured = undefined; __lastError = ""; __pending = [];
       window.__rmgafData = null;
       DataManager.loadDataFile("__rmgafData", path.slice(5));
+    }
+    function __compressed(path) {
+      if (typeof LZString === "undefined") return false;
+      const actual = __folded.get(path.normalize("NFC").toLowerCase());
+      const encoded = __files.get(actual);
+      if (typeof encoded !== "string") return false;
+      const text = LZString.decompressFromBase64(encoded);
+      if (typeof text !== "string" || LZString.compressToBase64(text) !== encoded) return false;
+      const value = JSON.parse(text);
+      if (value === null || typeof value !== "object") return false;
+      __requests.add(path);
+      __loaded = true; __captured = value;
+      return true;
     }
     function __drain() {
       let count = 0;
@@ -124,16 +139,46 @@ async function main(): Promise<void> {
   new Script(bootstrap, { filename: "rmgaf:loader-environment" }).runInContext(context, {
     timeout: 5000
   })
-  for (const loader of input.loaders) {
-    new Script(loader.code, { filename: loader.name }).runInContext(context, { timeout: 2000 })
+  const output: VmOutput = { data: [], errors: [], requests: [], loaders: [], warnings: [] }
+  const loaders: { name: string; code: string }[] = []
+  const dependencies = new Set<string>()
+  for (const script of input.scripts) {
+    if (!script.code.includes("DataManager")) continue
+    try {
+      const extracted = extractLoaders(normalizeLoader(script.code), script.name, true)
+      output.warnings.push(...extracted.rejected.map((message) => `Unsupported loader: ${message}`))
+      for (const code of extracted.code) loaders.push({ name: script.name, code })
+      for (const name of extracted.dependencies) dependencies.add(name)
+    } catch (error) {
+      output.warnings.push(
+        `${script.name}: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
   }
-  const output: VmOutput = { data: [], errors: [], requests: [] }
+  // LZ-String is an auxiliary JSON format too, not necessarily a loadDataFile override.
+  if (input.scripts.some((script) => script.code.includes("LZString.decompressFromBase64")))
+    dependencies.add("LZString")
+  for (const name of dependencies) {
+    if (Object.hasOwn(context, name)) continue
+    for (const script of input.scripts) {
+      const code = extractLibrary(script.code, name)
+      if (!code) continue
+      new Script(code, { filename: script.name }).runInContext(context, { timeout: 2000 })
+      output.loaders.push(script.name)
+      break
+    }
+  }
+  for (const loader of loaders) {
+    new Script(loader.code, { filename: loader.name }).runInContext(context, { timeout: 2000 })
+    output.loaders.push(loader.name)
+  }
+  output.loaders = [...new Set(output.loaders)]
   for (const path of input.targets) {
     try {
-      new Script(`__decode(${JSON.stringify(path)}); __drain();`, { filename: path }).runInContext(
-        context,
-        { timeout: 5000 }
-      )
+      new Script(
+        `if (!__compressed(${JSON.stringify(path)})) { __decode(${JSON.stringify(path)}); __drain(); }`,
+        { filename: path }
+      ).runInContext(context, { timeout: 5000 })
       const serialized = new Script("__drain(); __result();").runInContext(context, {
         timeout: 5000
       })

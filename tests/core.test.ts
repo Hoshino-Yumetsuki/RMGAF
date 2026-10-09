@@ -472,3 +472,45 @@ void test("decoded System still must be a JSON object", async (context) => {
   )
   assert.throws(() => applyChanges(report), /blocked/)
 })
+
+void test("legacy JS comments do not hide resources or change source bytes", async (context) => {
+  const root = game(context)
+  const source = Buffer.concat([
+    Buffer.from("// "),
+    Buffer.from([0x82, 0xa0]),
+    Buffer.from('\nImageManager.loadCharacter("Hero");')
+  ])
+  const filename = put(root, "js/rpg_core.js", source)
+  put(root, "img/characters/hero.png")
+  const report = await inspectGame(root)
+  assert.deepEqual(report.issues, [])
+  assert.deepEqual(
+    report.changes.map(({ old, new: target }) => [old, target]),
+    [["img/characters/hero.png", "img/characters/Hero.png"]]
+  )
+  applyChanges(report)
+  assert.equal(fs.readFileSync(path.join(root, "img/characters/Hero.png"), "utf8"), "asset bytes")
+  assert.deepEqual(fs.readFileSync(filename), source)
+})
+
+void test("invalid UTF-8 in JS resource names or plugin metadata still blocks repairs", async (context) => {
+  for (const [prefix, suffix] of [
+    ['ImageManager.loadCharacter("', '");'],
+    ["/*:\n * @param ", "\n * @type file\n */"],
+    ["/*~struct~Asset:\n * @param ", "\n * @type file\n */"]
+  ]) {
+    const root = game(context)
+    put(
+      root,
+      "js/rpg_core.js",
+      Buffer.concat([Buffer.from(prefix), Buffer.from([0xff]), Buffer.from(suffix)])
+    )
+    const before = snapshot(root)
+    const report = await inspectGame(root)
+    assert.ok(
+      report.issues.some((issue) => issue.kind === "error" && issue.path === "js/rpg_core.js")
+    )
+    assert.throws(() => applyChanges(report), /blocked/)
+    assert.deepEqual(snapshot(root), before)
+  }
+})

@@ -2,6 +2,7 @@ import fs from "node:fs"
 import { randomUUID } from "node:crypto"
 import path from "node:path"
 import { homedir } from "node:os"
+import { parse } from "acorn"
 import { discoverData } from "./data.js"
 import { discoverText, discoverPluginParameters, parsePlugins, parseImageIgnores } from "./text.js"
 import { reference, type Decoder, type Engine, type Plugin, type Reference } from "./references.js"
@@ -125,7 +126,28 @@ export class FileIndex {
     return matches.length === 1 ? matches[0] : undefined
   }
   read(value: string): string {
-    return utf8.decode(fs.readFileSync(path.join(this.root, value)))
+    const bytes = fs.readFileSync(path.join(this.root, value))
+    try {
+      return utf8.decode(bytes)
+    } catch (error) {
+      if (path.extname(value).toLowerCase() !== ".js") throw error
+      let text = new TextDecoder().decode(bytes)
+      const comments: [number, number][] = []
+      parse(text, {
+        ecmaVersion: "latest",
+        onComment: (_block, comment, start, end) => {
+          if (comment.includes("\ufffd") && !/^(?::|~struct~)/.test(comment))
+            comments.push([start, end])
+        }
+      })
+      // Ordinary comments have no resource semantics. Never guess an encoding
+      // for executable text, resource strings, or RPG Maker plugin metadata.
+      for (const [start, end] of comments)
+        text =
+          text.slice(0, start) + text.slice(start, end).replace(/[^\r\n]/g, " ") + text.slice(end)
+      if (text.includes("\ufffd")) throw error
+      return text
+    }
   }
 }
 

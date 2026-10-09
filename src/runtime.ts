@@ -2,8 +2,7 @@ import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { extname, posix } from "node:path"
 import { DATABASES, FileIndex } from "./core.js"
-import { extractLoaders } from "./loader.js"
-import { parsePlugins } from "./text.js"
+import { discoverText, parsePlugins } from "./text.js"
 import { VmInput, VmOutput, maxVmBytes } from "./vm-protocol.js"
 import type { Decoder } from "./references.js"
 
@@ -13,26 +12,19 @@ export const decodeTrustedGame: Decoder = async (root, files) => {
   const registry = index.one("js/plugins.js")
   if (!registry) throw new Error("Trusted decoding needs a unique js/plugins.js registry")
   const plugins = parsePlugins(index.read(registry)).filter((plugin) => plugin.status)
-  const loaders: VmInput["loaders"] = []
-  const unsupported: string[] = []
-  for (const plugin of plugins) {
-    const requested = `js/plugins/${plugin.name}.js`
-    const path = index.one(requested)
-    if (!path) continue // The scanner separately reports missing active plugins.
-    const source = index.read(path)
-    if (!source.includes("loadDataFile")) continue
-    try {
-      const extracted = extractLoaders(source, path)
-      unsupported.push(...extracted.rejected)
-      for (const code of extracted.code) loaders.push({ name: path, code })
-    } catch (error) {
-      unsupported.push(`${path}: ${error instanceof Error ? error.message : String(error)}`)
-    }
+  const scripts: VmInput["scripts"] = []
+  const names = new Set<string>()
+  const entry = index.one("index.html")
+  if (entry) {
+    for (const ref of discoverText(index.read(entry), "html", "index.html"))
+      for (const path of ref.paths)
+        if (path.startsWith("js/libs/") && path.endsWith(".js")) names.add(path)
   }
-  if (!loaders.length)
-    throw new Error(
-      `No executable data-loader closure found.${unsupported.length ? " " + unsupported.join("; ") : ""}`
-    )
+  for (const plugin of plugins) names.add(`js/plugins/${plugin.name}.js`)
+  for (const name of names) {
+    const path = index.one(name)
+    if (path) scripts.push({ name: path, code: index.read(path) })
+  }
   const inputs: [string, string][] = []
   let total = 0
   for (const [path, directory] of index.entries) {
@@ -59,7 +51,7 @@ export const decodeTrustedGame: Decoder = async (root, files) => {
       return "data/" + (database ? `${database}.json` : map ? `Map${map[1]}.json` : relative)
     }),
     plugins: plugins.map((plugin) => ({ name: plugin.name, parameters: plugin.parameters ?? {} })),
-    loaders
+    scripts
   }
   const sourceMode = import.meta.url.endsWith(".ts")
   const worker = fileURLToPath(
@@ -154,7 +146,7 @@ export const decodeTrustedGame: Decoder = async (root, files) => {
     data,
     errors,
     requests,
-    loaders: [...new Set(loaders.map((loader) => loader.name))],
-    warnings: unsupported.map((message) => `Unsupported loader: ${message}`)
+    loaders: response.loaders,
+    warnings: response.warnings
   }
 }

@@ -1,5 +1,5 @@
 {
-  "name": "rmgaf",
+  "name": "@q78kg/rmgaf",
   "version": "1.0.0",
   "description": "RPG Maker MV/MZ resource filename case checker with opt-in trusted JavaScript decoding",
   "bin": "dist/cli.mjs",

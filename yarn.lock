@@ -523,6 +523,7 @@ __metadata:
     acorn-walk: "npm:^8.3.5"
     eslint-scope: "npm:^9.1.2"
     htmlparser2: "npm:^12.0.0"
+    moejs-wasm: "npm:1.0.0-beta.2"
     oxfmt: "npm:^0.72.0"
     oxlint: "npm:^1.87.0"
     oxlint-tsgolint: "npm:^7.0.2003"
@@ -1348,6 +1349,13 @@ __metadata:
   dependencies:
     minipass: "npm:^7.1.2"
   checksum: 10c0/5aad75ab0090b8266069c9aabe582c021ae53eb33c6c691054a13a45db3b4f91a7fb1bd79151e6b4e9e9a86727b522527c0a06ec7d45206b745d54cd3097bcec
+  languageName: node
+  linkType: hard
+
+"moejs-wasm@npm:1.0.0-beta.2":
+  version: 1.0.0-beta.2
+  resolution: "moejs-wasm@npm:1.0.0-beta.2"
+  checksum: 10c0/a76212685d454d9f0106f90569740708b5883684cd9c024b2166e4a921f71343674c215590c01b8e6eb92503a8a5f5c57dc2c1736dcfcb20ee43daa0cd072128
   languageName: node
   linkType: hard
 

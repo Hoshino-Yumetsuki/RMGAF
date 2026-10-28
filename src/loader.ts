@@ -1,8 +1,9 @@
 import { parse } from "acorn"
-import { createContext, Script } from "node:vm"
+import type { Engine } from "moejs-wasm"
 import { fullAncestor } from "acorn-walk"
 import { analyze, type Variable } from "eslint-scope"
 import type { Node, Program } from "estree"
+import { createRuntime, runScript } from "./vm.js"
 
 // Only a data loader's lexical dependency closure is executed. Rendering and
 // unrelated plugin hooks are deliberately outside this execution surface.
@@ -403,7 +404,7 @@ export function extractLoaders(
 }
 
 /** Resolve computed loader names in the worker, without running plugin startup. */
-export function normalizeLoader(source: string): string {
+export async function normalizeLoader(source: string, engine: Engine): Promise<string> {
   const tree = parse(source, { ecmaVersion: "latest", ranges: true })
   const decoders = new Set<string>()
   fullAncestor(tree, (node) => {
@@ -428,42 +429,50 @@ export function normalizeLoader(source: string): string {
   )
   if (!definitions.length) return source
   const end = Math.max(...definitions.map((node) => node.end))
-  const context = createContext({ atob, btoa }, { codeGeneration: { strings: false, wasm: false } })
-  // No engine, timers, DOM, filesystem or network is supplied to the string-table prelude.
-  new Script(source.slice(0, end)).runInContext(context, { timeout: 2000 })
-  const calls: { start: number; end: number }[] = []
-  const scopes = analyze(tree as unknown as Program, {
-    ecmaVersion: 2022,
-    sourceType: "script",
-    optimistic: true,
-    ignoreEval: true
-  })
-  const globalCalls = new Set(
-    scopes.scopes
-      .flatMap((scope) => scope.references)
-      .filter((ref) => ref.resolved?.scope.type === "global" && decoders.has(ref.identifier.name))
-      .map((ref) => (ref.identifier as Located).start)
-  )
-  fullAncestor(tree, (node) => {
-    if (
-      node.type === "CallExpression" &&
-      node.callee.type === "Identifier" &&
-      globalCalls.has(node.callee.start) &&
-      node.arguments.every((arg) => arg.type === "Literal")
+  const runtime = await createRuntime(engine)
+  try {
+    // No game engine, timers, DOM, filesystem or network is supplied to the prelude.
+    await runScript(engine, runtime, "rmgaf:string-table", source.slice(0, end), 2000)
+    const calls: { start: number; end: number }[] = []
+    const scopes = analyze(tree as unknown as Program, {
+      ecmaVersion: 2022,
+      sourceType: "script",
+      optimistic: true,
+      ignoreEval: true
+    })
+    const globalCalls = new Set(
+      scopes.scopes
+        .flatMap((scope) => scope.references)
+        .filter((ref) => ref.resolved?.scope.type === "global" && decoders.has(ref.identifier.name))
+        .map((ref) => (ref.identifier as Located).start)
     )
-      calls.push(node)
-  })
-  const values: unknown = new Script(
-    `JSON.stringify([${calls.map((node) => source.slice(node.start, node.end)).join(",")}])`
-  ).runInContext(context, { timeout: 2000 })
-  if (typeof values !== "string") throw new Error("String-table decoder returned no values")
-  const decoded = JSON.parse(values) as unknown[]
-  for (let i = calls.length - 1; i >= 0; i--) {
-    if (typeof decoded[i] !== "string") continue
-    const node = calls[i]!
-    source = source.slice(0, node.start) + JSON.stringify(decoded[i]) + source.slice(node.end)
+    fullAncestor(tree, (node) => {
+      if (
+        node.type === "CallExpression" &&
+        node.callee.type === "Identifier" &&
+        globalCalls.has(node.callee.start) &&
+        node.arguments.every((arg) => arg.type === "Literal")
+      )
+        calls.push(node)
+    })
+    const values = await runScript(
+      engine,
+      runtime,
+      "rmgaf:string-table-values",
+      `JSON.stringify([${calls.map((node) => source.slice(node.start, node.end)).join(",")}])`,
+      2000
+    )
+    if (typeof values !== "string") throw new Error("String-table decoder returned no values")
+    const decoded = JSON.parse(values) as unknown[]
+    for (let i = calls.length - 1; i >= 0; i--) {
+      if (typeof decoded[i] !== "string") continue
+      const node = calls[i]!
+      source = source.slice(0, node.start) + JSON.stringify(decoded[i]) + source.slice(node.end)
+    }
+    return source
+  } finally {
+    await runtime.close()
   }
-  return source
 }
 
 /** Select a standalone global library declaration, not the rest of its script. */

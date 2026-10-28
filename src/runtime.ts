@@ -60,19 +60,17 @@ export const decodeTrustedGame: Decoder = async (root, files) => {
   const serialized = JSON.stringify(input)
   if (Buffer.byteLength(serialized) > maxVmBytes) throw new Error("VM request exceeds 64 MiB")
   const response = await new Promise<VmOutput>((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["--max-old-space-size=768", ...(sourceMode ? ["--import", "tsx"] : []), worker],
-      {
-        cwd: fileURLToPath(new URL("..", import.meta.url)),
-        env: {
-          PATH: process.env.PATH ?? "",
-          ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {})
-        },
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true
-      }
-    )
+    const child = spawn(process.execPath, [...(sourceMode ? ["--import", "tsx"] : []), worker], {
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+      env: {
+        // MoeJS threads inherit execArgv, where V8 heap flags are forbidden.
+        NODE_OPTIONS: "--max-old-space-size=768",
+        PATH: process.env.PATH ?? "",
+        ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {})
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true
+    })
     let stdout = "",
       stderr = "",
       outputBytes = 0

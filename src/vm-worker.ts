@@ -1,9 +1,10 @@
-import { createContext, Script } from "node:vm"
+import { createMoeJS, type Engine } from "moejs-wasm"
 import { VmInput, VmOutput, maxVmBytes } from "./vm-protocol.js"
 import { extractLibrary, extractLoaders, normalizeLoader } from "./loader.js"
+import { createRuntime, runScript } from "./vm.js"
 
-// This process is a fault/timeout boundary, NOT a security sandbox. It is only
-// launched after explicit trusted-code authorization in the parent CLI.
+// Game code runs inside the MoeJS WASM sandbox. This process adds fault/timeout
+// isolation and requires explicit trusted-code authorization in the parent CLI.
 async function main(): Promise<void> {
   const chunks: Buffer[] = []
   let bytes = 0
@@ -14,22 +15,25 @@ async function main(): Promise<void> {
   }
   const input = VmInput.parse(JSON.parse(Buffer.concat(chunks).toString("utf8")))
   chunks.length = 0
-  const context = createContext(
-    {
-      atob,
-      btoa,
-      TextDecoder,
-      TextEncoder,
-      __filesJson: JSON.stringify(input.files),
-      __pluginsJson: JSON.stringify(
-        input.plugins.map((plugin) => [plugin.name.toLowerCase(), plugin.parameters])
-      )
-    },
-    {
-      name: "rmgaf-trusted-loader",
-      codeGeneration: { strings: false, wasm: false },
-      microtaskMode: "afterEvaluate"
-    }
+  const engine = await createMoeJS({ timeoutMs: 5000 })
+  try {
+    const output = await decode(input, engine)
+    const serialized = JSON.stringify(output)
+    if (Buffer.byteLength(serialized) > maxVmBytes) throw new Error("VM output exceeds 64 MiB")
+    process.stdout.write(serialized)
+  } finally {
+    await engine.close()
+  }
+}
+
+async function decode(input: VmInput, engine: Engine): Promise<VmOutput> {
+  const runtime = await createRuntime(engine)
+  const run = (source: string, filename: string, timeoutMs: number) =>
+    runScript(engine, runtime, filename, source, timeoutMs)
+  await runtime.setGlobal("__filesJson", JSON.stringify(input.files))
+  await runtime.setGlobal(
+    "__pluginsJson",
+    JSON.stringify(input.plugins.map((plugin) => [plugin.name.toLowerCase(), plugin.parameters]))
   )
   input.files.length = 0
   const bootstrap = String.raw`
@@ -136,16 +140,18 @@ async function main(): Promise<void> {
       return JSON.stringify(__captured);
     }
   `
-  new Script(bootstrap, { filename: "rmgaf:loader-environment" }).runInContext(context, {
-    timeout: 5000
-  })
+  await run(bootstrap, "rmgaf:loader-environment", 5000)
   const output: VmOutput = { data: [], errors: [], requests: [], loaders: [], warnings: [] }
   const loaders: { name: string; code: string }[] = []
   const dependencies = new Set<string>()
   for (const script of input.scripts) {
     if (!script.code.includes("DataManager")) continue
     try {
-      const extracted = extractLoaders(normalizeLoader(script.code), script.name, true)
+      const extracted = extractLoaders(
+        await normalizeLoader(script.code, engine),
+        script.name,
+        true
+      )
       output.warnings.push(...extracted.rejected.map((message) => `Unsupported loader: ${message}`))
       for (const code of extracted.code) loaders.push({ name: script.name, code })
       for (const name of extracted.dependencies) dependencies.add(name)
@@ -159,42 +165,40 @@ async function main(): Promise<void> {
   if (input.scripts.some((script) => script.code.includes("LZString.decompressFromBase64")))
     dependencies.add("LZString")
   for (const name of dependencies) {
-    if (Object.hasOwn(context, name)) continue
+    if (await run(`Object.hasOwn(globalThis, ${JSON.stringify(name)})`, "rmgaf:dependency", 1000))
+      continue
     for (const script of input.scripts) {
       const code = extractLibrary(script.code, name)
       if (!code) continue
-      new Script(code, { filename: script.name }).runInContext(context, { timeout: 2000 })
+      await run(code, script.name, 2000)
       output.loaders.push(script.name)
       break
     }
   }
   for (const loader of loaders) {
-    new Script(loader.code, { filename: loader.name }).runInContext(context, { timeout: 2000 })
+    await run(loader.code, loader.name, 2000)
     output.loaders.push(loader.name)
   }
   output.loaders = [...new Set(output.loaders)]
   for (const path of input.targets) {
     try {
-      new Script(
+      await run(
         `if (!__compressed(${JSON.stringify(path)})) { __decode(${JSON.stringify(path)}); __drain(); }`,
-        { filename: path }
-      ).runInContext(context, { timeout: 5000 })
-      const serialized = new Script("__drain(); __result();").runInContext(context, {
-        timeout: 5000
-      })
+        path,
+        5000
+      )
+      const serialized = await run("__drain(); __result();", path, 5000)
       if (typeof serialized !== "string") throw new Error("Loader returned no JSON")
       output.data.push([path, JSON.parse(serialized)])
     } catch (error) {
+      await runtime.clearInterrupt()
       output.errors.push([path, error instanceof Error ? error.message : String(error)])
     }
   }
-  const requested: unknown = JSON.parse(
-    new Script("JSON.stringify([...__requests])").runInContext(context, { timeout: 1000 })
-  )
-  output.requests = VmOutput.shape.requests.parse(requested)
-  const serialized = JSON.stringify(output)
-  if (Buffer.byteLength(serialized) > maxVmBytes) throw new Error("VM output exceeds 64 MiB")
-  process.stdout.write(serialized)
+  const serializedRequests = await run("JSON.stringify([...__requests])", "rmgaf:requests", 1000)
+  if (typeof serializedRequests !== "string") throw new Error("Loader returned no request list")
+  output.requests = VmOutput.shape.requests.parse(JSON.parse(serializedRequests))
+  return output
 }
 
 main().catch((error: unknown) => {

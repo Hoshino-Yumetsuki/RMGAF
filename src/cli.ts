@@ -29,7 +29,7 @@ async function main(): Promise<number> {
   })
   if (values.help) {
     process.stdout.write(
-      `rmgaf ${version} — RPG Maker MV/MZ resource filename alignment\n\nUsage: rmgaf <directory> [options]\n\n  <directory>        Directory containing index.html (MV usually: www)\n  --check            Report without renaming game files\n  --trust  Execute trusted data-loader closures in a child Node VM\n                     WARNING: not a security sandbox; only trusted games\n  -v, --verbose      Show every issue and its source\n  --no-color         Disable colors and animation (also respects NO_COLOR)\n  --version          Print version\n  -h, --help         Print help\n\nDefault: JSON-first static scan; no game code is executed.\nVM decoding is opt-in even with --check. It does not run the entire game.\nExit codes: 0 clean/repaired, 1 unresolved issues, 2 usage/I/O error, 130 interrupted.\nClose the game and back it up before repair.\n`
+      `rmgaf ${version} — RPG Maker MV/MZ resource filename alignment\n\nUsage: rmgaf <directory> [options]\n\n  <directory>        Directory containing index.html (MV usually: www)\n  --check            Report without renaming game files\n  --trust  Execute trusted data-loader closures in a child MoeJS WASM runtime\n  -v, --verbose      Show every issue and its source\n  --no-color         Disable colors and animation (also respects NO_COLOR)\n  --version          Print version\n  -h, --help         Print help\n\nDefault: JSON-first static scan; no game code is executed.\nVM decoding is opt-in even with --check. It does not run the entire game.\nExit codes: 0 clean/repaired, 1 unresolved issues, 2 usage/I/O error, 130 interrupted.\nClose the game and back it up before repair.\n`
     )
     return 0
   }
@@ -52,9 +52,7 @@ async function main(): Promise<number> {
     `${paint(["bold", "cyan"], "rmgaf")}  ${values.check ? "Check" : "Repair"}\n${paint("dim", "  " + visible(directory))}\n`
   )
   if (values["trust"])
-    process.stderr.write(
-      "warning: trusted game JavaScript execution enabled; note that node:vm is NOT a security sandbox.\n"
-    )
+    process.stderr.write("warning: trusted game JavaScript execution enabled in moejs-wasm\n")
   let active = false,
     frame = 0,
     updated = 0,

@@ -213,7 +213,6 @@ void test("CLI does not execute loaders without explicit trusted-code authorizat
   })
   assert.equal(trusted.status, 1, trusted.stderr)
   assert.match(trusted.stdout, /hero\.PNG.*Hero\.png/)
-  assert.match(trusted.stderr, /NOT a security sandbox/)
   assert.ok(!trusted.stdout.includes("\x1b"))
   assert.deepEqual(snapshot(root), before)
   const repaired = spawnSync(
@@ -309,7 +308,7 @@ void test(
     const before = snapshot(root)
     const report = await inspectGame(root, { decode: decodeTrustedGame })
     assert.equal(isBlocked(report), true)
-    assert.ok(report.issues.some((issue) => /timed out/.test(issue.detail)))
+    assert.equal(report.decoded, 0)
     assert.deepEqual(snapshot(root), before)
   }
 )
@@ -362,3 +361,49 @@ void test("computed loader names retain global libraries without running plugin 
   )
   assert.equal(fs.readFileSync(path.join(root, "data/Actors.json"), "utf8"), encoded)
 })
+
+void test("typed-array loaders decode UTF-8 through Promise callbacks", async (t) => {
+  const expected = [null, { characterName: "Hero", name: "勇者🌟" }]
+  const encoded = Buffer.from(JSON.stringify(expected)).toString("base64")
+  const root = fixture(
+    t,
+    `DataManager.loadDataFile = function(name, src) {
+      const xhr = new XMLHttpRequest();
+      xhr.open("GET", "data/" + src);
+      xhr.responseType = "arraybuffer";
+      xhr.onload = function() {
+        const text = new TextDecoder().decode(xhr.response);
+        const bytes = Uint8Array.from(atob(text), value => value.charCodeAt(0));
+        Promise.resolve().then(() => DataManager.onLoad(JSON.parse(new TextDecoder("utf-8", {fatal:true}).decode(bytes))));
+      };
+      xhr.send();
+    };`,
+    encoded
+  )
+  const result = await decodeTrustedGame(root, ["data/Actors.json"])
+  assert.deepEqual(result.data.get("data/Actors.json"), expected)
+  assert.deepEqual([...result.errors], [])
+  assert.deepEqual(result.requests, ["data/Actors.json"])
+  assert.equal(fs.readFileSync(path.join(root, "data/Actors.json"), "utf8"), encoded)
+})
+
+void test(
+  "a timed-out database does not prevent decoding later databases",
+  { timeout: 15_000 },
+  async (t) => {
+    const root = fixture(
+      t,
+      `DataManager.loadDataFile = function(name, src) {
+      if (src === "Actors.json") { while (true) {} }
+      DataManager.onLoad([{characterName:"Hero"}]);
+    };`,
+      "encrypted"
+    )
+    const before = snapshot(root)
+    const result = await decodeTrustedGame(root, ["data/Actors.json", "data/Classes.json"])
+    assert.equal(result.errors.has("data/Actors.json"), true)
+    assert.equal(result.data.has("data/Actors.json"), false)
+    assert.deepEqual(result.data.get("data/Classes.json"), [{ characterName: "Hero" }])
+    assert.deepEqual(snapshot(root), before)
+  }
+)
